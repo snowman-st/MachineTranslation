@@ -10,14 +10,25 @@ with codecs.open(In_file, 'r') as f:
 	lines = f.readlines()
 	lens = len(lines)
 	train_size = int(0.7 * lens)
-	with codecs.open('../data/data/eng-fra.train','w+',encoding='utf-8') as t:
-		for i in range(train_size):
-			t.write(lines[i])
+	en_train = codecs.open('../data/data/eng-fra.train.en', 'a+',encoding='utf-8')
+	fr_train = codecs.open('../data/data/eng-fra.train.fr', 'a+',encoding='utf-8')
+	for i in range(train_size):
+		en , fr = lines[i].split('\t')
+		en_train.write(en+'\n')
+		fr_train.write(fr)
+		
+	en_dev = codecs.open('../data/data/eng-fra.dev.en', 'a+',encoding='utf-8')
+	fr_dev = codecs.open('../data/data/eng-fra.dev.fr', 'a+',encoding='utf-8')
+	for i in range(train_size,lens):
+		en,fr = lines[i].split('\t')
+		en_dev.write(en+'\n')
+		fr_dev.write(fr)
 
-	with codecs.open('../data/data/eng-fra.dev','w+',encoding='utf-8') as d:
-		for j in range(train_size,lens):
-			d.write(lines[j])
-
+	en_train.close()
+	fr_train.close()
+	en_dev.close()
+	fr_dev.close()
+	
 df = pd.read_csv(In_file,sep='\t',names=['en','fr'])
 en_corpus = df['en'].tolist()
 fr_corpus = df['fr'].tolist()

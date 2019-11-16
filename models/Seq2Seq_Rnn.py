@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
 
 class Encoder(nn.Module):
-	def __init__(self,embedding_size,hidden_size,vocab_size):
+	def __init__(self,opt):
 		super(Encoder,self).__init__()
-		self.embedding_size = embedding_size
-		self.hidden_size = hidden_size
-
-		self.embed = nn.Embedding(vocab_size,self.embedding_size)
-		self.gru = nn.GRU(self.embedding_size,self.hidden_size,num_layers=1,bidirectional=True,batch_first = True)
+		self.embedding_size = opt.embedding_size
+		self.hidden_size = opt.hidden_size
+		self.vocab_size = opt.src_vocab_size
+		self.embed = nn.Embedding(self.vocab_size,self.embedding_size)
+		self.gru = nn.GRU(self.embedding_size,self.hidden_size,num_layers=1,bidirectional=True,batch_first = False)
+		self.bi2uni = nn.Linear(self.hidden_size * 2, self.hidden_size)
 
 	def forward(self,inputs):
 		embedded = self.embed(inputs)
@@ -18,31 +20,75 @@ class Encoder(nn.Module):
 		outputs,hn = self.gru(embedded)
 		# outputs   N * T * (E*2)
 		# hn[0]  N * 1 * (E*2)
+		outputs = self.bi2uni(outputs)
 		return outputs,hn[0]
 
 
 class Decoder(nn.Module):
-	def __init__(self,embedding_size,hidden_size,vocab_size,):
+	def __init__(self,opt):
 		super(Decoder,self).__init__()
-		self.hidden_size = hidden_size
+		self.hidden_size = opt.hidden_size
+		self.embedding_size = opt.embedding_size
+		self.vocab_size = opt.trg_vocab_size
+		self.device = opt.device
 
-		self.embed = nn.Embedding(vocab_size,embedding_size)
-		self.gru = nn.GRU(embedding_size+hidden_size,hidden_size,batch_first=True)
-		self.attn = nn.Linear(hidden_size*2,hidden_size)
+		self.embed = nn.Embedding(self.vocab_size,self.embedding_size)
+		self.gru = nn.GRU(self.embedding_size+self.hidden_size,self.hidden_size,batch_first=False)
+		self.attn = nn.Linear(self.hidden_size,self.hidden_size)
 
-		self.out = nn.Linear(hidden_size,vocab_size)
+		self.out = nn.Linear(self.hidden_size,self.vocab_size)
 
 	def forward(self,inputs,pre_hidden,outputs):
 		embedded = self.embed(inputs)
 		# embedded N * 1 * E
-		attn_weights = F.softmax(pre_hidden.bmm(self.attn(outputs).permute(0,2,1)))
+		# print(pre_hidden.shape)
+		# print(outputs.shape)
+		# assert 1<0
+		attn_weights = F.softmax(pre_hidden.permute(1,0,2).bmm(self.attn(outputs).permute(1,2,0)),dim=2)
 		# attn_weights  N * 1 * T
-		attn_combine = attn_weights.bmm(outputs)
+		attn_combine = attn_weights.bmm(outputs.permute(1,0,2))
 		# attn_combine N * 1 * H
-		gru_input = torch.cat((embedded,attn_combine),2)
-		_,hn = self.gru(gru_input,pre_hidden)
+		gru_input = torch.cat((embedded,attn_combine.permute(1,0,2).contiguous()),2).contiguous()
+		_,hn = self.gru(gru_input,pre_hidden.contiguous())
 		out = self.out(hn[0])
-		return out,hn[0]
+		return F.log_softmax(out),hn[0]
 
 	def initHidden(self):
-		return Variable(torch.zeors(1,1,self.hidden_size))
+		return Variable(torch.zeros(1,1,self.hidden_size)).to(self.device)
+
+
+def decode(encoder,decoder,encoder_input,decoder_input,criterion,opt):
+	'''
+	encoder_input:  T * N
+	decoder_input:  T * N
+
+	'''
+	SOS_TOKEN = 2
+	EOS_TOKEN = 3
+
+	src_len = encoder_input.shape[0]
+	trg_len = decoder_input.shape[0]
+	batch_size = decoder_input.shape[1]
+
+	encoder_outputs,hn = encoder(encoder_input)
+	# encoder_outputs   N*T*(E*2)
+
+
+	decoder_hidden = decoder.initHidden().expand(-1,batch_size,-1)
+	decoder_inputs = torch.tensor([[SOS_TOKEN]],device=opt.device).expand(-1,batch_size)
+	loss = 0.
+	for di in range(1,trg_len):
+		decoder_output, decoder_hidden = decoder(
+			decoder_inputs, decoder_hidden, encoder_outputs)
+		topv, topi = decoder_output.topk(1)
+		decoder_inputs = topi.squeeze().detach()  # detach from history as input
+
+		print(decoder_output.shape)
+		print(decoder_input[di])
+		loss += criterion(decoder_output, decoder_input[di])
+		if decoder_input.item() == EOS_TOKEN:
+			break
+		
+	return loss.item() / trg_len
+
+	
