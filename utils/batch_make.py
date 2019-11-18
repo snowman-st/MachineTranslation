@@ -6,10 +6,11 @@ import spacy
 
 def getBatches(trainfile,devfile,batch_size,device):
 
-	UNK_TOKEN = '<UNK>'
-	PAD_TOKEN = '<PAD>'
-	SOS_TOKEN = '<S>'
-	EOS_TOKEN = '</S>'
+	UNK_TOKEN = '<UNK>'    #  0
+	PAD_TOKEN = '<PAD>'    #  1
+	SOS_TOKEN = '<S>'      #  2
+	EOS_TOKEN = '</S>'     #  3
+	#一般是按照这种顺序分配其序号，若部分TOKEN没有（如source 中不设置SOS_TOKEN），则后来的递补
 
 	spacy_fr = spacy.load('fr_core_news_sm')
 	spacy_en = spacy.load('en_core_web_sm')

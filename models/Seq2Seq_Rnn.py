@@ -48,7 +48,7 @@ class Decoder(nn.Module):
 		# attn_weights  N * 1 * T
 		attn_combine = attn_weights.bmm(outputs.permute(1,0,2))
 		# attn_combine N * 1 * H
-		gru_input = torch.cat((embedded,attn_combine.permute(1,0,2).contiguous()),2).contiguous()
+		gru_input = torch.cat((embedded.unsqueeze(0),attn_combine.permute(1,0,2).contiguous()),2).contiguous()
 		_,hn = self.gru(gru_input,pre_hidden.contiguous())
 		out = self.out(hn[0])
 		return F.log_softmax(out),hn[0]
@@ -56,8 +56,17 @@ class Decoder(nn.Module):
 	def initHidden(self):
 		return Variable(torch.zeros(1,1,self.hidden_size)).to(self.device)
 
+class Seq2Seq_rnn(nn.Module):
+	def __init__(self,encoder,decoder):
+		super(Seq2Seq_rnn,self).__init__()
+		self.encoder = encoder
+		self.decoder = decoder
 
-def decode(encoder,decoder,encoder_input,decoder_input,criterion,opt):
+	def forward(self,encoder_input,decoder_input,opt):
+		return decode(self.encoder,self.decoder,encoder_input,decoder_input,opt)
+
+
+def decode(encoder,decoder,encoder_input,decoder_input,opt):
 	'''
 	encoder_input:  T * N
 	decoder_input:  T * N
@@ -75,20 +84,15 @@ def decode(encoder,decoder,encoder_input,decoder_input,criterion,opt):
 
 
 	decoder_hidden = decoder.initHidden().expand(-1,batch_size,-1)
-	decoder_inputs = torch.tensor([[SOS_TOKEN]],device=opt.device).expand(-1,batch_size)
-	loss = 0.
+	decoder_inputs = Variable(decoder_input.data[0,:]).to(opt.device)   # SOS_TOKEN
+	outputs = Variable(torch.zeros(trg_len,batch_size,opt.trg_vocab_size)).to(opt.device)
+
 	for di in range(1,trg_len):
 		decoder_output, decoder_hidden = decoder(
 			decoder_inputs, decoder_hidden, encoder_outputs)
-		topv, topi = decoder_output.topk(1)
-		decoder_inputs = topi.squeeze().detach()  # detach from history as input
-
-		print(decoder_output.shape)
-		print(decoder_input[di])
-		loss += criterion(decoder_output, decoder_input[di])
-		if decoder_input.item() == EOS_TOKEN:
-			break
-		
-	return loss.item() / trg_len
+		outputs[di] = decoder_output
+		decoder_inputs = decoder_output.data.max(1)[1].to(opt.device)
+		decoder_hidden = decoder_hidden.unsqueeze(0)
+	return outputs
 
 	
