@@ -59,10 +59,11 @@ class Decoder(nn.Module):
 		return Variable(torch.zeros(1,1,self.hidden_size)).to(self.device)
 
 class Seq2Seq_rnn(nn.Module):
-	def __init__(self,encoder,decoder):
+	def __init__(self,encoder,decoder,PAD_INDEX,*args,**kwargs):
 		super(Seq2Seq_rnn,self).__init__()
 		self.encoder = encoder
 		self.decoder = decoder
+		self.pad_index = PAD_INDEX
 
 	def forward(self,encoder_input,decoder_input,opt):
 		return self.decode(self.encoder,self.decoder,encoder_input,decoder_input,opt)
@@ -88,7 +89,7 @@ class Seq2Seq_rnn(nn.Module):
 		decoder_hidden = decoder.initHidden().expand(-1,batch_size,-1)
 		decoder_inputs = Variable(decoder_input.data[0,:]).to(opt.device)   # SOS_TOKEN
 		outputs = Variable(torch.zeros(trg_len,batch_size,opt.trg_vocab_size)).to(opt.device)
-		mask = self.create_mask(encoder_input,1)
+		mask = self.create_mask(encoder_input,self.pad_index)
 
 		for di in range(1,trg_len):
 			decoder_output, decoder_hidden = decoder(

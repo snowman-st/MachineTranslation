@@ -12,8 +12,9 @@ from torch.autograd import Variable
 from utils.batch_make import getBatches,gettestBatches
 # from models.Seq2Seq_Rnn import Encoder,Decoder,Seq2Seq_rnn
 from models.Seq2Seq_cnn import Encoder,Decoder,Seq2Seq_CNN
+from models.transformer import Seq2Seq_trans
 import os 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 
 def parse_args():
@@ -22,18 +23,30 @@ def parse_args():
 	parser.add_argument('--train_file',type=str,default= 'data/data/eng-fra.train')
 	parser.add_argument('--dev_file',type=str,default= 'data/data/eng-fra.dev')
 	parser.add_argument('--best_model_path',type=str,default='saved/models/')
+	parser.add_argument('--model_type',type=str,default='transformer')
 	parser.add_argument('--device',type=str,default='cuda' if torch.cuda.is_available() else 'cpu')
 	parser.add_argument('--epochs',type=int,default=20)
 	parser.add_argument('--batch_size',type=int,default=64)
+
+	#-------rnn / cnn---------
 	parser.add_argument('--embedding_size',type=int,default=300)
 	parser.add_argument('--hidden_size',type=int,default=128)
 	parser.add_argument('--src_vocab_size',type=int,default=25000)
 	parser.add_argument('--trg_vocab_size',type=int,default=40000)
 	parser.add_argument('--in_channels',type=int,default=1)
-	parser.add_argument('--out_channels',type=int,default=1)
+	parser.add_argument('--out_channels',type=int,default=128)
 	parser.add_argument('--filter_size',type=int,default=3)
 	parser.add_argument('--n_convlayers',type=int,default=2)
 	parser.add_argument('--dropout',type=float,default=0.2)
+	parser.add_argument('--max_seq_len',type=int,default=100)
+
+	#------transformer------
+	parser.add_argument('--d_model',type=int,default=512)
+	parser.add_argument('--n_heads',type=int,default=8)
+	parser.add_argument('--num_encoder_layers',type=int,default=6)
+	parser.add_argument('--num_decoder_layers',type=int,default=6)
+	parser.add_argument('--dim_feedforward',type=int,default=1024)
+	
 
 	return parser.parse_args()
 
@@ -46,12 +59,26 @@ def train():
 	opt.trg_vocab_size = t
 	print('end reading......')
 
-	encoder = Encoder(opt).to(opt.device)
-	decoder = Decoder(opt).to(opt.device)
-	model = Seq2Seq_CNN(encoder,decoder).to(opt.device)
+	if 'rnn' in opt.model_type or 'lstm' in opt.model_type:
+		encoder = Encoder(opt).to(opt.device)
+		decoder = Decoder(opt).to(opt.device)
+		model = Seq2Seq_Rnn(encoder,decoder,PAD_INDEX).to(opt.device)
+		criterion = nn.NLLLoss(ignore_index=PAD_INDEX)  #pad_token==1
+	elif 'cnn' in opt.model_type:
+		encoder = Encoder(opt).to(opt.device)
+		decoder = Decoder(opt).to(opt.device)
+		model = Seq2Seq_CNN(encoder,decoder,PAD_INDEX).to(opt.device)
+		criterion = nn.CrossEntropyLoss(ignore_index = PAD_INDEX)
+	elif 'transformer' in opt.model_type:
+		model = Seq2Seq_trans(opt).to(opt.device)
+		criterion = nn.CrossEntropyLoss(ignore_index = PAD_INDEX)
+	else:
+		exit('**ERROR:The input is not a valid model!')
+
+	
 	model.train()
 	optimizer = torch.optim.Adam(model.parameters())
-	criterion = nn.NLLLoss(ignore_index=PAD_INDEX)  #pad_token==1
+	
 	best_loss = 8. 
 
 	for epoch in range(opt.epochs):
@@ -66,7 +93,7 @@ def train():
 		devloss = eval(model,dev_batch,criterion,opt)
 		if devloss < best_loss:
 			best_loss = devloss
-			torch.save(model,opt.best_model_path+'rnn.pkl')
+			torch.save(model,opt.best_model_path+opt.model_type+'.pkl')
 			print('The {} epoch with train loss:{}//test loss:{}'.format(epoch+1,loss,devloss))
 			print('model saved in {}!'.format(opt.best_model_path+'rnn.pkl'))
 		print('The {} epoch of training with:'.format(epoch+1))

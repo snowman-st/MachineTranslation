@@ -5,8 +5,8 @@ import torch.nn.functional as F
 
 
 class Encoder(nn.Module):
-	def __init__(self,*args,**kwargs):
-		super(Encoder,self).__init(opt)
+	def __init__(self,opt,*args,**kwargs):
+		super(Encoder,self).__init__()
 		self.embedding_size = opt.embedding_size
 		self.vocab_size = opt.src_vocab_size
 		self.seq_len = opt.max_seq_len
@@ -22,10 +22,10 @@ class Encoder(nn.Module):
 
 		self.convs = nn.ModuleList([nn.Conv2d(
 			in_channels = opt.in_channels,
-			out_channels = self.output_channels,
+			out_channels = opt.out_channels * 2,
 			kernel_size = (self.filter_size,self.hidden_size),
 			padding = ((self.filter_size - 1) // 2 , 0))
-			for _in range(opt.n_conv_layers)])
+			for _ in range(opt.n_convlayers)])
 
 		self.scale = torch.sqrt(torch.tensor([0.5])).to(self.device)
 		self.dropout = nn.Dropout(opt.dropout)
@@ -47,8 +47,10 @@ class Encoder(nn.Module):
 		# N * T * E  ———> N * 1 * T * H
 
 		for conv in self.convs:
-			conv_out = self.dropout(conv(input_feature))
+			conv_out = self.dropout(conv(input_feature)).permute(0,3,2,1)
+			#  N * 1 * T * (2*H)
 			conv_out = F.glu(conv_out)
+			#  N * 1 * T * H
 			input_feature = (input_feature + conv_out) * self.scale
 
 		conved = self.hid2emb(input_feature.squeeze())
@@ -58,8 +60,8 @@ class Encoder(nn.Module):
 		return conved , combined
 
 class Decoder(nn.Module):
-	def __init__(self,*args,**kwargs):
-		super(Decoder,self).__init__(opt)
+	def __init__(self,opt,*args,**kwargs):
+		super(Decoder,self).__init__()
 		self.hidden_size = opt.hidden_size
 		self.embedding_size = opt.embedding_size
 		self.vocab_size = opt.trg_vocab_size
@@ -77,14 +79,44 @@ class Decoder(nn.Module):
 
 		self.convs = nn.ModuleList([nn.Conv2d(
 			in_channels = opt.in_channels,
-			out_channels = opt.out_channels,
-			kernel_size = opt.filter_size,
+			out_channels = opt.out_channels * 2,
+			kernel_size = (opt.filter_size,self.hidden_size),
 			)
 			for _ in range(opt.n_convlayers)])
 
 		self.scale = torch.sqrt(torch.tensor([0.5])).to(self.device)
 		self.dropout = nn.Dropout(opt.dropout)
 		self.out = nn.Linear(self.embedding_size,self.vocab_size)
+
+
+
+	def forward(self,trg,encoder_conved,encoder_combined):
+		'''
+			trg : N * P
+			encoder_conved :  	N * T * E
+			encoder_combined :	N * T * E
+		'''
+		word_embedding = self.word_embed(trg)
+
+		input_feature = self.emb2hid(word_embedding).unsqueeze(1)
+
+		for conv in self.convs:
+			'''
+				需向前 pad 两个字符
+			'''
+			padding = torch.zeros(input_feature.shape[0],1,self.filter_size-1,input_feature.shape[3]).fill_(1).to(self.device)
+			# 1 是 pad_index
+			padded_input_feature = torch.cat((padding,input_feature),dim=2)
+			conv_out = self.dropout(conv(padded_input_feature)).permute(0,3,2,1)
+			conv_out = F.glu(conv_out)
+			attn_combined = self.attention(word_embedding,conv_out,encoder_conved,encoder_combined)
+
+			input_feature = (attn_combined + input_feature) * self.scale
+
+		conved = self.hid2emb(input_feature.squeeze())
+
+		out = self.out(self.dropout(conved))
+		return out
 
 	def attention(self,decoder_embedded,decoder_conved,encoder_conved,encoder_combined):
 		'''
@@ -93,6 +125,7 @@ class Decoder(nn.Module):
 			encoder_conved :  	N * T * E
 			encoder_combined :	N * T * E
 		'''
+		decoder_conved_origin = decoder_conved
 		decoder_conved = self.attnhid2emb(decoder_conved.squeeze())
 		decoder_combined = (decoder_conved + decoder_embedded) * self.scale
 		#  N * P * E
@@ -105,51 +138,23 @@ class Decoder(nn.Module):
 		# N * P * E
 
 		decoder_attn = self.attnemb2hid(decoder_attn)
-		attn_combined = (decoder_conved + decoder_attn)
+		attn_combined = (decoder_conved_origin + decoder_attn.unsqueeze(1)) * self.scale
 
 		return attn_combined
 
-	def forward(self,trg,encoder_conved,encoder_combined):
-		'''
-			trg : N * P
-			encoder_conved :  	N * T * E
-			encoder_combined :	N * T * E
-		'''
-		word_embedding = self.word_embedding(trg)
-
-		input_feature = self.emb2hid(word_embedding)
-
-		for conv in self.convs:
-			'''
-				需向前 pad 两个字符
-			'''
-			padding = torch.zeros(input_feature.shape[0],self.filter_size-1,input_feature.shape[2])
-			padded_input_feature = torch.cat((padding,input_feature),dim=1)
-
-			conv_out = self.dropout(conv(input_feature))
-			conv_out = F.glu(conv_out)
-
-			attn_combined = self.attention(word_embedding,conv_out,encoder_conved,encoder_combined)
-
-			input_feature = (attn_combined + input_feature) * self.scale
-
-		conved = self.hid2emb(input_feature)
-
-		out = self.out(self.dropout(conved))
-		return out
-
 class Seq2Seq_CNN(nn.Module):
-	def __init__(self,*args,**kwargs):
-		super().__init__(encoder,decoder)
+	def __init__(self,encoder,decoder,PAD_INDEX,*args,**kwargs):
+		super().__init__()
 		self.encoder = encoder
 		self.decoder = decoder
+		self.pad_index = PAD_INDEX
 
 	def forward(self,src,trg,opt=None):
-		src_mask = self.create_mask(src,1)
+		src_mask = self.create_mask(src,self.pad_index)
 		encoder_conved,encoder_combined = self.encoder(src,src_mask)
 		output = self.decoder(trg,encoder_conved,encoder_combined)
-		return ouput
+		return output
 
 	def create_mask(self,src,pad_index):
 		# src: sentence_len * batch_size 
-		return (src != pad_index).permute(1,0)
+		return (src != pad_index)
