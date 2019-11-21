@@ -6,22 +6,25 @@ import spacy
 
 def getBatches(trainfile,devfile,batch_size,device):
 
-	UNK_TOKEN = '<UNK>'    #  0
-	PAD_TOKEN = '<PAD>'    #  1
 	SOS_TOKEN = '<S>'      #  2
 	EOS_TOKEN = '</S>'     #  3
 	#一般是按照这种顺序分配其序号，若部分TOKEN没有（如source 中不设置SOS_TOKEN），则后来的递补
 
 	spacy_fr = spacy.load('fr_core_news_sm')
 	spacy_en = spacy.load('en_core_web_sm')
+	spacy_de = spacy.load('de_core_web_sm')
 	def tokenize_fr(text):
 		return [tok.text for tok in spacy_fr.tokenizer(text)]
 
 	def tokenize_en(text):
 		return [tok.text for tok in spacy_en.tokenizer(text)]
 
-	SRC_TEXT = td.Field(fix_length=45,tokenize=tokenize_en,unk_token=UNK_TOKEN,pad_token=PAD_TOKEN,init_token=None,eos_token=EOS_TOKEN)
-	TRG_TEXT = td.Field(fix_length=50,tokenize=tokenize_fr,unk_token=UNK_TOKEN,pad_token=PAD_TOKEN,init_token=SOS_TOKEN,eos_token=EOS_TOKEN)
+	def tokenize_de(text):
+		return [tok.text for tok in spacy_de.tokenizer(text)]
+
+	SRC_TEXT = td.Field(fix_length=45,tokenize=tokenize_en,init_token=None,eos_token=EOS_TOKEN)
+	TRG_TEXT = td.Field(fix_length=50,tokenize=tokenize_fr,init_token=SOS_TOKEN,eos_token=EOS_TOKEN)
+	#这里刚开始使用了自定义的  UNK_TOKEN 竟然导致 在测试集中的  未识别的字符不能自动转成  <unk>
 
 	train = datasets.TranslationDataset(trainfile, exts=('.en','.fr'), fields=(SRC_TEXT,TRG_TEXT))
 	dev   = datasets.TranslationDataset(devfile, exts=('.en','.fr'), fields=(SRC_TEXT,TRG_TEXT))
@@ -43,9 +46,8 @@ def getBatches(trainfile,devfile,batch_size,device):
 	# print(s_vocab.stoi[EOS_TOKEN])   # 3
 	# print(s_vocab.stoi[SOS_TOKEN])   # 2
 
-
 	train_iter = td.BucketIterator(dataset = train, batch_size = batch_size,sort_key = lambda x: data.interleave_keys(len(x.src), len(x.trg)),device = device)
-	dev_iter = td.BucketIterator(dataset = dev, batch_size = 1 , train=False,device = device)
+	dev_iter = td.BucketIterator(dataset = dev, batch_size = batch_size*20 , train=False,device = device)
 	#train_iter.src.shape = [45 *32]
 	#train_iter.trg.shape = [50 *32]
 
@@ -56,7 +58,40 @@ def getBatches(trainfile,devfile,batch_size,device):
 	则通常可以使用交错排序方式来提高这些查询的性能。譬如当查询对辅助排序列使用限制性谓词时，与复合排序相比，交错排序可显著提高查询的性能。
 
 	'''
-	return train_iter,dev_iter
+	return train_iter,dev_iter,TRG_TEXT.vocab.stoi['<pad>']	
+
+
+def gettestBatches(batch_size,device):
+	SOS_TOKEN = '<S>'      #  2
+	EOS_TOKEN = '</S>'     #  3
+	#一般是按照这种顺序分配其序号，若部分TOKEN没有（如source 中不设置SOS_TOKEN），则后来的递补
+
+	spacy_fr = spacy.load('fr_core_news_sm')
+	spacy_en = spacy.load('en_core_web_sm')
+	spacy_de = spacy.load('de_core_news_sm')
+	def tokenize_fr(text):
+		return [tok.text for tok in spacy_fr.tokenizer(text)]
+
+	def tokenize_en(text):
+		return [tok.text for tok in spacy_en.tokenizer(text)]
+
+	def tokenize_de(text):
+		return [tok.text for tok in spacy_de.tokenizer(text)]
+
+	SRC_TEXT = td.Field(tokenize=tokenize_de,init_token=None,eos_token=EOS_TOKEN)
+	TRG_TEXT = td.Field(tokenize=tokenize_en,init_token=SOS_TOKEN,eos_token=EOS_TOKEN)
+	#这里刚开始使用了自定义的  UNK_TOKEN 竟然导致 在测试集中的  未识别的字符不能自动转成  <unk>
+	train,dev,test = datasets.Multi30k.splits(exts=('.de','.en'),fields=(SRC_TEXT,TRG_TEXT))
+
+	SRC_TEXT.build_vocab(train.src,min_freq=2)
+	TRG_TEXT.build_vocab(train.trg,min_freq=2)
+	train_iter = td.BucketIterator(dataset = train, batch_size = batch_size,sort_key = lambda x: data.interleave_keys(len(x.src), len(x.trg)),device = device)
+	dev_iter = td.BucketIterator(dataset = dev, batch_size = batch_size*20 , train=False,device = device)
+
+
+
+	return train_iter,dev_iter,TRG_TEXT.vocab.stoi['<pad>'],len(SRC_TEXT.vocab),len(TRG_TEXT.vocab)
+
 
 
 

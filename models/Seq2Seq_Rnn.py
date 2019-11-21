@@ -38,20 +38,22 @@ class Decoder(nn.Module):
 
 		self.out = nn.Linear(self.hidden_size,self.vocab_size)
 
-	def forward(self,inputs,pre_hidden,outputs):
+	def forward(self,inputs,pre_hidden,outputs,mask):
 		embedded = self.embed(inputs)
 		# embedded N * 1 * E
 		# print(pre_hidden.shape)
 		# print(outputs.shape)
 		# assert 1<0
-		attn_weights = F.softmax(pre_hidden.permute(1,0,2).bmm(self.attn(outputs).permute(1,2,0)),dim=2)
+		attn_weights = pre_hidden.permute(1,0,2).bmm(self.attn(outputs).permute(1,2,0))
+		attn_weights = attn_weights.squeeze().masked_fill(mask==0,-1e10)
+		attn_weights = F.softmax(attn_weights.unsqueeze(1),dim=2)
 		# attn_weights  N * 1 * T
 		attn_combine = attn_weights.bmm(outputs.permute(1,0,2))
 		# attn_combine N * 1 * H
 		gru_input = torch.cat((embedded.unsqueeze(0),attn_combine.permute(1,0,2).contiguous()),2).contiguous()
 		_,hn = self.gru(gru_input,pre_hidden.contiguous())
 		out = self.out(hn[0])
-		return F.log_softmax(out),hn[0]
+		return F.log_softmax(out,dim=-1),hn[0]
 
 	def initHidden(self):
 		return Variable(torch.zeros(1,1,self.hidden_size)).to(self.device)
@@ -63,36 +65,40 @@ class Seq2Seq_rnn(nn.Module):
 		self.decoder = decoder
 
 	def forward(self,encoder_input,decoder_input,opt):
-		return decode(self.encoder,self.decoder,encoder_input,decoder_input,opt)
+		return self.decode(self.encoder,self.decoder,encoder_input,decoder_input,opt)
 
 
-def decode(encoder,decoder,encoder_input,decoder_input,opt):
-	'''
-	encoder_input:  T * N
-	decoder_input:  T * N
+	def decode(self,encoder,decoder,encoder_input,decoder_input,opt):
+		'''
+		encoder_input:  T * N
+		decoder_input:  T * N
 
-	'''
-	SOS_TOKEN = 2
-	EOS_TOKEN = 3
+		'''
+		SOS_TOKEN = 2
+		EOS_TOKEN = 3
 
-	src_len = encoder_input.shape[0]
-	trg_len = decoder_input.shape[0]
-	batch_size = decoder_input.shape[1]
+		src_len = encoder_input.shape[0]
+		trg_len = decoder_input.shape[0]
+		batch_size = decoder_input.shape[1]
 
-	encoder_outputs,hn = encoder(encoder_input)
-	# encoder_outputs   N*T*(E*2)
+		encoder_outputs,hn = encoder(encoder_input)
+		# encoder_outputs   N*T*(E*2)
 
 
-	decoder_hidden = decoder.initHidden().expand(-1,batch_size,-1)
-	decoder_inputs = Variable(decoder_input.data[0,:]).to(opt.device)   # SOS_TOKEN
-	outputs = Variable(torch.zeros(trg_len,batch_size,opt.trg_vocab_size)).to(opt.device)
+		decoder_hidden = decoder.initHidden().expand(-1,batch_size,-1)
+		decoder_inputs = Variable(decoder_input.data[0,:]).to(opt.device)   # SOS_TOKEN
+		outputs = Variable(torch.zeros(trg_len,batch_size,opt.trg_vocab_size)).to(opt.device)
+		mask = self.create_mask(encoder_input,1)
 
-	for di in range(1,trg_len):
-		decoder_output, decoder_hidden = decoder(
-			decoder_inputs, decoder_hidden, encoder_outputs)
-		outputs[di] = decoder_output
-		decoder_inputs = decoder_output.data.max(1)[1].to(opt.device)
-		decoder_hidden = decoder_hidden.unsqueeze(0)
-	return outputs
+		for di in range(1,trg_len):
+			decoder_output, decoder_hidden = decoder(
+				decoder_inputs, decoder_hidden, encoder_outputs,mask)
+			outputs[di] = decoder_output
+			decoder_inputs = decoder_output.data.max(1)[1].to(opt.device)
+			decoder_hidden = decoder_hidden.unsqueeze(0)
+		return outputs
 
-	
+		
+	def create_mask(self,src,pad_index):
+		# src: sentence_len * batch_size 
+		return (src != pad_index).permute(1,0)
