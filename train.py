@@ -10,8 +10,8 @@ from tqdm import tqdm
 from torch.autograd import Variable
 
 from utils.batch_make import getBatches,gettestBatches
-from models.Seq2Seq_Rnn import Encoder,Decoder,Seq2Seq_rnn
-
+# from models.Seq2Seq_Rnn import Encoder,Decoder,Seq2Seq_rnn
+from models.Seq2Seq_cnn import Encoder,Decoder,Seq2Seq_CNN
 import os 
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
@@ -29,7 +29,11 @@ def parse_args():
 	parser.add_argument('--hidden_size',type=int,default=128)
 	parser.add_argument('--src_vocab_size',type=int,default=25000)
 	parser.add_argument('--trg_vocab_size',type=int,default=40000)
-
+	parser.add_argument('--in_channels',type=int,default=1)
+	parser.add_argument('--out_channels',type=int,default=1)
+	parser.add_argument('--filter_size',type=int,default=3)
+	parser.add_argument('--n_convlayers',type=int,default=2)
+	parser.add_argument('--dropout',type=float,default=0.2)
 
 	return parser.parse_args()
 
@@ -44,7 +48,7 @@ def train():
 
 	encoder = Encoder(opt).to(opt.device)
 	decoder = Decoder(opt).to(opt.device)
-	model = Seq2Seq_rnn(encoder,decoder).to(opt.device)
+	model = Seq2Seq_CNN(encoder,decoder).to(opt.device)
 	model.train()
 	optimizer = torch.optim.Adam(model.parameters())
 	criterion = nn.NLLLoss(ignore_index=PAD_INDEX)  #pad_token==1
